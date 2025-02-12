@@ -18,7 +18,8 @@ import { toEvmAddress } from "@resolv/common/dist/util.js";
  * @dev 1 LP = (X PT + Y SY) where X and Y are defined by market conditions
  * So same as Balancer LPT, we need to update all positions on every swap
  */
-
+const SECONDS_IN_YEAR = 31_536_000
+const FIXED_POINT = BigInt(10 ** 18);
 export async function handleLPTransfer(
   evt: TransferEvent,
   ctx: PendleMarketContext
@@ -65,12 +66,18 @@ export async function processAllLPAccounts(
     marketContract.totalActiveSupply(),
     marketContract.readState(marketContract.address),
   ]);
-
+  const expiry_timestamp = Number(await marketContract.expiry())
   const timestamp = getUnixTimestamp(ctx.timestamp);
+  const t = (expiry_timestamp - timestamp)/SECONDS_IN_YEAR
   let promises = [];
   for (let i = 0; i < allAddresses.length; i++) {
     const account = allAddresses[i];
-    const impliedSy = (allUserShares[i] * state.totalSy) / totalShare;
+    const impliedAPY = Number(state.lastLnImpliedRate) / Number(1e18);
+    const timeToMaturity = Number(expiry_timestamp - timestamp) / Number(SECONDS_IN_YEAR);
+    const discountFactor = Math.pow(1 + impliedAPY, timeToMaturity);
+    const ptPriceFixed = BigInt(Math.floor((1 / discountFactor) * Number(FIXED_POINT)))
+    const ptValue = (state.totalPt * ptPriceFixed) / FIXED_POINT;
+    const impliedSy = (allUserShares[i] * (state.totalSy + ptValue)) / totalShare;
     promises.push(updateAccount(ctx, account, impliedSy, timestamp));
   }
   await Promise.all(promises);
